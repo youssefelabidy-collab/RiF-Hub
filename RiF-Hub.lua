@@ -56,6 +56,13 @@ end
 return nil
 end
 
+local function isMoneyOrDropName(nameLower)
+return nameLower:find("cash") or nameLower:find("coin") or nameLower:find("money")
+or nameLower:find("collect") or nameLower:find("drop") or nameLower:find("orb")
+or nameLower:find("gem") or nameLower:find("reward") or nameLower:find("income")
+or nameLower:find("pet") or nameLower:find("animal") or nameLower:find("claim")
+end
+
 local function isThrowZonePart(part)
 if not part:IsA("BasePart") then return false end
 local c = part.Color
@@ -64,9 +71,9 @@ local pn = part.Parent and part.Parent.Name:lower() or ""
 
 local nameHit = n:find("throw") or n:find("lane") or n:find("zone") or n:find("strip") or n:find("range") or n:find("meter")
 or pn:find("throw") or pn:find("lane") or pn:find("zone")
-local yellowHit = (c.R > 0.55 and c.G > 0.45 and c.B < 0.45)
+local yellowOrOrangeHit = (c.R > 0.55 and c.G > 0.35 and c.B < 0.45)
 
-return nameHit or (yellowHit and (part.Size.X >= 3 or part.Size.Z >= 3))
+return nameHit or (yellowOrOrangeHit and (part.Size.X >= 3 or part.Size.Z >= 3))
 end
 
 local function isUpgradeOrRod(str)
@@ -75,7 +82,7 @@ return s:find("upgrade") or s:find("update") or s:find("buy") or s:find("shop") 
 end
 
 local function scanCache(force)
-if not force and (os.clock() - cache.lastScan < 2.0) then return end
+if not force and (os.clock() - cache.lastScan < 1.8) then return end
 cache.lastScan = os.clock()
 
 table.clear(cache.remotes)
@@ -100,8 +107,15 @@ end
 if obj:IsA("TouchTransmitter") and obj.Parent and obj.Parent:IsA("BasePart") then
 local p = obj.Parent
 local n = p.Name:lower()
-if n:find("cash") or n:find("coin") or n:find("money") or n:find("collect") or n:find("drop") or n:find("orb") then
+local pn = p.Parent and p.Parent.Name:lower() or ""
+if isMoneyOrDropName(n) or isMoneyOrDropName(pn) then
 table.insert(cache.collectParts, p)
+end
+elseif obj:IsA("BasePart") then
+local n = obj.Name:lower()
+local pn = obj.Parent and obj.Parent.Name:lower() or ""
+if isMoneyOrDropName(n) or isMoneyOrDropName(pn) then
+table.insert(cache.collectParts, obj)
 end
 end
 
@@ -191,22 +205,29 @@ end
 return bestPos, bestDist
 end
 
-local function triggerPerfectThrow(tool)
+local function triggerThrowCycle(tool, hrp)
 if tool then
 pcall(function() tool:Activate() end)
 end
 
-if VirtualInputManager then
-local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 600)
-local cx, cy = math.floor(vp.X * 0.5), math.floor(vp.Y * 0.65)
+if hrp then
+local lookDir = hrp.CFrame.LookVector
 pcall(function()
-VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 0)
-task.wait(0.18)
-VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 0)
+hrp.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + Vector3.new(lookDir.X, 0, lookDir.Z))
 end)
 end
 
-fireRemotesWithArgs({ "throw", "feed", "food", "toss", "launch", "perfect", "power" }, {
+if VirtualInputManager then
+local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 600)
+local tx, ty = math.floor(vp.X * 0.78), math.floor(vp.Y * 0.75)
+pcall(function()
+VirtualInputManager:SendMouseButtonEvent(tx, ty, 0, true, game, 0)
+task.wait(0.18)
+VirtualInputManager:SendMouseButtonEvent(tx, ty, 0, false, game, 0)
+end)
+end
+
+fireRemotesWithArgs({ "throw", "feed", "food", "toss", "launch", "perfect", "power", "eat", "pet", "animal" }, {
 { 20, true },
 { 20, "PERFECT" },
 { 1, true },
@@ -214,7 +235,6 @@ fireRemotesWithArgs({ "throw", "feed", "food", "toss", "launch", "perfect", "pow
 })
 end
 
--- Move smoothly to throw zone and perform 20m PERFECT throw
 local function stepAutoThrow(char, hrp, hum)
 local zPos, zDist = findNearestThrowZone(hrp.Position)
 if zPos and zDist > 5 and hum then
@@ -223,10 +243,9 @@ return
 end
 
 local tool = equipTool()
-triggerPerfectThrow(tool)
+triggerThrowCycle(tool, hrp)
 end
 
--- Train at the training equipment (not rod upgrade) for 2 seconds then auto-stop
 local function runTwoSecondTrain()
 task.spawn(function()
 local startClock = os.clock()
@@ -273,15 +292,22 @@ for i = #cache.collectParts, 1, -1 do
 local part = cache.collectParts[i]
 if not part or not part.Parent or part:IsDescendantOf(char) then
 table.remove(cache.collectParts, i)
-elseif firetouchinterest then
+else
+local dist = (hrp.Position - part.Position).Magnitude
+if firetouchinterest and dist < 160 then
 pcall(function()
 firetouchinterest(hrp, part, 0)
-task.wait(0.015)
+task.wait(0.01)
 firetouchinterest(hrp, part, 1)
+end)
+elseif dist < 35 and part.Anchored == false then
+pcall(function()
+part.CFrame = hrp.CFrame
 end)
 end
 end
-fireRemotesWithArgs({ "collect", "claim", "cash", "coin", "money" })
+end
+fireRemotesWithArgs({ "collect", "claim", "cash", "coin", "money", "income", "reward", "pet", "animal" })
 end
 
 local function tpBiome(name)
@@ -302,11 +328,12 @@ end
 
 local function printDebugInfo()
 scanCache(true)
-print("=== [RiF Hub Scan] ===")
+print("=== [RiF Hub Money & Farm Scan] ===")
+print("Money/Collect parts:", #cache.collectParts)
 print("Throw zones:", #cache.throwZones)
 print("Train spots:", #cache.trainSpots)
 print("Remotes:", #cache.remotes)
-for i = 1, math.min(#cache.remotes, 20) do
+for i = 1, math.min(#cache.remotes, 25) do
 print(" - Remote:", cache.remotes[i].Name)
 end
 end
@@ -317,18 +344,18 @@ if cfg.throwFood or cfg.collect or cfg.events then
 scanCache(false)
 local char, hrp, hum = getRig()
 if char and hrp then
-if cfg.throwFood then
-stepAutoThrow(char, hrp, hum)
-end
 if cfg.collect then
 stepAutoCollect(char, hrp)
 end
+if cfg.throwFood then
+stepAutoThrow(char, hrp, hum)
+end
 if cfg.events then
-fireRemotesWithArgs({ "event", "claim", "reward", "gift", "spin" })
+fireRemotesWithArgs({ "event", "claim", "reward", "gift", "spin", "money", "cash" })
 end
 end
 end
-task.wait(0.35)
+task.wait(0.25)
 end
 end)
 
@@ -401,10 +428,10 @@ top.Parent = win
 Instance.new("UICorner", top).CornerRadius = UDim.new(0, 10)
 
 local titleLbl = Instance.new("TextLabel")
-titleLbl.Size = UDim2.new(0, 165, 1, 0)
+titleLbl.Size = UDim2.new(0, 175, 1, 0)
 titleLbl.Position = UDim2.new(0, 12, 0, 0)
 titleLbl.BackgroundTransparency = 1
-titleLbl.Text = "RiF Hub - 20m Throw"
+titleLbl.Text = "RiF Hub - Money Farm"
 titleLbl.TextColor3 = Color3.fromRGB(240, 246, 255)
 titleLbl.Font = Enum.Font.GothamBold
 titleLbl.TextSize = 13
@@ -525,6 +552,16 @@ badge.BackgroundColor3 = active and Color3.fromRGB(37, 99, 235) or Color3.fromRG
 badge.TextColor3 = Color3.fromRGB(255, 255, 255)
 end
 
+local _, bCollect = addRow(pageMain, "Auto Money", "OFF", function(_, s)
+cfg.collect = not cfg.collect
+paintState(s, cfg.collect)
+end)
+
+local _, bThrow = addRow(pageMain, "Auto Throw (20m)", "OFF", function(_, s)
+cfg.throwFood = not cfg.throwFood
+paintState(s, cfg.throwFood)
+end)
+
 local _, bTrain = addRow(pageMain, "Train (2s Auto-Off)", "OFF", function(_, s)
 cfg.train = not cfg.train
 paintState(s, cfg.train)
@@ -537,17 +574,7 @@ setTrainUI = function(active)
 paintState(bTrain, active)
 end
 
-local _, bThrow = addRow(pageMain, "Auto Throw (20m)", "OFF", function(_, s)
-cfg.throwFood = not cfg.throwFood
-paintState(s, cfg.throwFood)
-end)
-
-local _, bCollect = addRow(pageMain, "Auto Collect", "OFF", function(_, s)
-cfg.collect = not cfg.collect
-paintState(s, cfg.collect)
-end)
-
-local _, bFull = addRow(pageMain, "Full Farm", "OFF", function(_, s)
+local _, bFull = addRow(pageMain, "Full Money Farm", "OFF", function(_, s)
 local nextV = not (cfg.throwFood and cfg.collect)
 cfg.throwFood = nextV
 cfg.collect = nextV
@@ -657,9 +684,7 @@ closeBtn.MouseButton1Click:Connect(function()
 cfg.train = false
 cfg.throwFood = false
 cfg.collect = false
-cfg.events
-
- = false
+cfg.events = false
 cfg.speed = false
 cfg.jump = false
 gui:Destroy()
