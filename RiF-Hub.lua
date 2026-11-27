@@ -7,8 +7,8 @@ local VirtualInputManager = pcall(function() return game:GetService("VirtualInpu
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
-local oldGui = playerGui:FindFirstChild("RiFHubGui")
-if oldGui then oldGui:Destroy() end
+local existing = playerGui:FindFirstChild("RiFHubGui")
+if existing then existing:Destroy() end
 
 local cfg = {
 train = false,
@@ -22,6 +22,8 @@ jumpVal = 72,
 biomeIndex = 1
 }
 
+local setTrainUI = nil
+
 local biomes = {
 "Forest", "Savanna", "Desert", "Jungle", "Ocean",
 "Mountains", "Winter", "Hell", "Mythical", "Shadow", "Nuclear"
@@ -30,9 +32,8 @@ local biomes = {
 local cache = {
 remotes = {},
 collectParts = {},
-prompts = {},
-clicks = {},
-throwTargets = {},
+yellowZones = {},
+trainSpots = {},
 lastScan = 0
 }
 
@@ -44,7 +45,7 @@ local hum = char:FindFirstChildOfClass("Humanoid")
 return char, hrp, hum
 end
 
-local function getPartPos(inst)
+local function getPos(inst)
 if not inst then return nil end
 if inst:IsA("BasePart") then return inst.Position end
 if inst:IsA("Model") then
@@ -55,22 +56,28 @@ end
 return nil
 end
 
-local function isThrowSpotName(nameLower)
-return nameLower:find("feed") or nameLower:find("throw") or nameLower:find("food")
-or nameLower:find("animal") or nameLower:find("pet") or nameLower:find("pen")
-or nameLower:find("trough") or nameLower:find("bowl") or nameLower:find("barn")
-or nameLower:find("ranch") or nameLower:find("habitat")
+local function isYellowBrick(part)
+if not part:IsA("BasePart") then return false end
+local c = part.Color
+local isYellow = (c.R > 0.65 and c.G > 0.55 and c.B < 0.35)
+local nameLower = part.Name:lower()
+local isTrackOrZone = nameLower:find("yellow") or nameLower:find("throw") or nameLower:find("lane") or nameLower:find("strip") or nameLower:find("zone")
+return isYellow and (part.Size.X > 4 or part.Size.Z > 4 or isTrackOrZone)
 end
 
-local function scanWorldCache(force)
+local function isUpgradeOrRod(str)
+local s = str:lower()
+return s:find("upgrade") or s:find("update") or s:find("buy") or s:find("shop") or s:find("rod") or s:find("pole")
+end
+
+local function scanCache(force)
 if not force and (os.clock() - cache.lastScan < 2.5) then return end
 cache.lastScan = os.clock()
 
 table.clear(cache.remotes)
 table.clear(cache.collectParts)
-table.clear(cache.prompts)
-table.clear(cache.clicks)
-table.clear(cache.throwTargets)
+table.clear(cache.yellowZones)
+table.clear(cache.trainSpots)
 
 for _, r in ipairs(ReplicatedStorage:GetDescendants()) do
 if r:IsA("RemoteEvent") or r:IsA("RemoteFunction") then
@@ -82,32 +89,39 @@ local char = player.Character
 for _, obj in ipairs(workspace:GetDescendants()) do
 if char and obj:IsDescendantOf(char) then continue end
 
-if obj:IsA("ProximityPrompt") and obj.Enabled and obj.Parent then
-table.insert(cache.prompts, obj)
-elseif obj:IsA("ClickDetector") and obj.Parent and obj.Parent:IsA("BasePart") then
-table.insert(cache.clicks, obj)
-elseif obj:IsA("TouchTransmitter") and obj.Parent and obj.Parent:IsA("BasePart") then
-local part = obj.Parent
-local n = part.Name:lower()
-local pn = part.Parent and part.Parent.Name:lower() or ""
-if n:find("cash") or n:find("coin") or n:find("money") or n:find("collect")
-or n:find("drop") or n:find("orb") or n:find("gem") or n:find("reward")
-or pn:find("cash") or pn:find("coin") or pn:find("money") or pn:find("collect") or pn:find("drop") then
-table.insert(cache.collectParts, part)
+if obj:IsA("BasePart") and isYellowBrick(obj) then
+table.insert(cache.yellowZones, obj)
+end
+
+if obj:IsA("TouchTransmitter") and obj.Parent and obj.Parent:IsA("BasePart") then
+local p = obj.Parent
+local n = p.Name:lower()
+if n:find("cash") or n:find("coin") or n:find("money") or n:find("collect") or n:find("drop") or n:find("orb") then
+table.insert(cache.collectParts, p)
 end
 end
 
-if obj:IsA("Model") or obj:IsA("BasePart") then
-local n = obj.Name:lower()
-local isAnimalModel = obj:IsA("Model") and (obj:FindFirstChildOfClass("Humanoid") or obj:FindFirstChildWhichIsA("Animator", true))
-if isAnimalModel or isThrowSpotName(n) then
-local pos = getPartPos(obj)
+if obj:IsA("ProximityPrompt") and obj.Enabled and obj.Parent then
+local pn = obj.Parent.Name
+local ppn = obj.Parent.Parent and obj.Parent.Parent.Name or ""
+if not isUpgradeOrRod(pn) and not isUpgradeOrRod(ppn) then
+local l1, l2 = pn:lower(), ppn:lower()
+if l1:find("chin") or l1:find("bar") or l1:find("gym") or l1:find("train") or l1:find("lift")
+or l2:find("chin") or l2:find("bar") or l2:find("gym") or l2:find("train") then
+local pos = getPos(obj.Parent)
 if pos then
-table.insert(cache.throwTargets, {
-inst = obj,
-pos = pos,
-priority = isAnimalModel and 1 or 2
-})
+table.insert(cache.trainSpots, { kind = "prompt", prompt = obj, pos = pos })
+end
+end
+end
+elseif obj:IsA("ClickDetector") and obj.Parent and obj.Parent:IsA("BasePart") then
+local pn = obj.Parent.Name
+local ppn = obj.Parent.Parent and obj.Parent.Parent.Name or ""
+if not isUpgradeOrRod(pn) and not isUpgradeOrRod(ppn) then
+local l1, l2 = pn:lower(), ppn:lower()
+if l1:find("chin") or l1:find("bar") or l1:find("gym") or l1:find("train") or l1:find("lift")
+or l2:find("chin") or l2:find("bar") or l2:find("gym") or l2:find("train") then
+table.insert(cache.trainSpots, { kind = "click", click = obj, pos = obj.Parent.Position })
 end
 end
 end
@@ -117,9 +131,8 @@ end
 local function equipTool()
 local char = player.Character
 if not char then return nil end
-
-local tool = char:FindFirstChildOfClass("Tool")
-if tool then return tool end
+local equipped = char:FindFirstChildOfClass("Tool")
+if equipped then return equipped end
 
 local bp = player:FindFirstChild("Backpack")
 if bp then
@@ -133,11 +146,11 @@ end
 return nil
 end
 
-local function fireRemotesMatching(keywords)
+local function fireRemotes(keys)
 for _, rem in ipairs(cache.remotes) do
 local rn = rem.Name:lower()
-for _, kw in ipairs(keywords) do
-if rn:find(kw, 1, true) then
+for _, k in ipairs(keys) do
+if rn:find(k, 1, true) then
 if rem:IsA("RemoteEvent") then
 pcall(function() rem:FireServer() end)
 elseif rem:IsA("RemoteFunction") then
@@ -149,77 +162,31 @@ end
 end
 end
 
-local function findBestThrowTarget(originPos)
-local best = nil
-local bestScore = math.huge
-
-for i = #cache.throwTargets, 1, -1 do
-local entry = cache.throwTargets[i]
-if not entry.inst or not entry.inst.Parent then
-table.remove(cache.throwTargets, i)
+local function findNearestYellow(originPos)
+local bestPos = nil
+local bestDist = math.huge
+for i = #cache.yellowZones, 1, -1 do
+local part = cache.yellowZones[i]
+if not part or not part.Parent then
+table.remove(cache.yellowZones, i)
 else
-local pos = getPartPos(entry.inst)
-if pos then
-local dist = (originPos - pos).Magnitude
-local score = dist + (entry.priority == 1 and -6 or 0)
-if score < bestScore then
-bestScore = score
-best = { pos = pos, dist = dist }
+local pos = part.Position + Vector3.new(0, (part.Size.Y / 2) + 2, 0)
+local d = (originPos - pos).Magnitude
+if d < bestDist then
+bestDist = d
+bestPos = pos
 end
 end
 end
-end
-
-return best
+return bestPos, bestDist
 end
 
-local function doRealCollect(char, hrp)
-if not char or not hrp then return end
-
-for i = #cache.collectParts, 1, -1 do
-local part = cache.collectParts[i]
-if not part or not part.Parent or part:IsDescendantOf(char) then
-table.remove(cache.collectParts, i)
-else
-local touched = false
-if firetouchinterest then
-local ok = pcall(function()
-firetouchinterest(hrp, part, 0)
-task.wait(0.015)
-firetouchinterest(hrp, part, 1)
-end)
-touched = ok
-end
-
-if not touched then
-local dist = (hrp.Position - part.Position).Magnitude
-if dist < 45 then
-pcall(function()
-part.CFrame = hrp.CFrame
-end)
-end
-end
-end
-end
-
-fireRemotesMatching({ "collect", "claim", "cash", "coin", "money", "pick" })
-end
-
--- Move smoothly toward animal/throwing spot and throw food cleanly without teleporting away
-local function doRealThrow(char, hrp, hum)
-if not char or not hrp then return end
-
-local target = findBestThrowTarget(hrp.Position)
-if target then
-if target.dist > 14 then
-if hum then
-pcall(function() hum:MoveTo(target.pos) end)
-end
-else
-pcall(function()
-hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(target.pos.X, hrp.Position.Y, target.pos.Z))
-end)
-end
+-- Walk to yellow area smoothly without TP, then throw food
+local function stepAutoThrow(char, hrp, hum)
+local yPos, yDist = findNearestYellow(hrp.Position)
+if yPos and yDist > 5 and hum then
+pcall(function() hum:MoveTo(yPos) end)
+return
 end
 
 local tool = equipTool()
@@ -235,55 +202,67 @@ VirtualInputManager:SendMouseButtonEvent(450, 450, 0, false, game, 0)
 end)
 end
 
-fireRemotesMatching({ "throw", "feed", "food", "toss", "launch", "shoot" })
+fireRemotes({ "throw", "feed", "food", "toss", "launch" })
 end
 
-local function doRealTrain(char, hrp, hum)
-if not char or not hrp then return end
-
-local bestPrompt = nil
-local bestDist = math.huge
-
-for _, p in ipairs(cache.prompts) do
-if p and p.Parent and p.Enabled then
-local pn = p.Parent.Name:lower()
-local ppn = p.Parent.Parent and p.Parent.Parent.Name:lower() or ""
-if pn:find("chin") or pn:find("bar") or pn:find("gym") or pn:find("train") or pn:find("lift")
-or ppn:find("chin") or ppn:find("bar") or ppn:find("gym") or ppn:find("train") then
-local pos = getPartPos(p.Parent)
-if pos then
-local d = (hrp.Position - pos).Magnitude
-if d < bestDist then
-bestDist = d
-bestPrompt = { prompt = p, pos = pos, dist = d }
-end
-end
-end
+-- Train at the training equipment (not rod upgrade) for 2 seconds then auto-stop
+local function runTwoSecondTrain()
+task.spawn(function()
+local startClock = os.clock()
+while cfg.train and (os.clock() - startClock < 2) do
+scanCache(false)
+local char, hrp, hum = getRig()
+if char and hrp then
+local best = nil
+local bestD = math.huge
+for _, spot in ipairs(cache.trainSpots) do
+local d = (hrp.Position - spot.pos).Magnitude
+if d < bestD then
+bestD = d
+best = spot
 end
 end
 
-if bestPrompt then
-if bestPrompt.dist > 10 and hum then
-pcall(function() hum:MoveTo(bestPrompt.pos) end)
-end
-if bestPrompt.dist <= 14 then
-pcall(function() fireproximityprompt(bestPrompt.prompt) end)
-end
-end
-
-for _, cd in ipairs(cache.clicks) do
-if cd and cd.Parent and cd.Parent:IsA("BasePart") then
-local cn = cd.Parent.Name:lower()
-if cn:find("chin") or cn:find("bar") or cn:find("gym") or cn:find("train") or cn:find("lift") then
-local d = (hrp.Position - cd.Parent.Position).Magnitude
-if d < 20 and fireclickdetector then
-pcall(function() fireclickdetector(cd) end)
-end
+if best then
+if best.dist and best.dist > 8 and hum then
+pcall(function() hum:MoveTo(best.pos) end)
+elseif bestD > 8 and hum then
+pcall(function() hum:MoveTo(best.pos) end)
+else
+if best.kind == "prompt" then
+pcall(function() fireproximityprompt(best.prompt) end)
+elseif best.kind == "click" and fireclickdetector then
+pcall(function() fireclickdetector(best.click) end)
 end
 end
 end
 
-fireRemotesMatching({ "chin", "train", "lift", "strength", "power", "rep" })
+fireRemotes({ "chin", "train", "lift", "strength", "power" })
+end
+task.wait(0.2)
+end
+
+cfg.train = false
+if setTrainUI then
+setTrainUI(false)
+end
+end)
+end
+
+local function stepAutoCollect(char, hrp)
+for i = #cache.collectParts, 1, -1 do
+local part = cache.collectParts[i]
+if not part or not part.Parent or part:IsDescendantOf(char) then
+table.remove(cache.collectParts, i)
+elseif firetouchinterest then
+pcall(function()
+firetouchinterest(hrp, part, 0)
+task.wait(0.015)
+firetouchinterest(hrp, part, 1)
+end)
+end
+end
+fireRemotes({ "collect", "claim", "cash", "coin", "money" })
 end
 
 local function tpBiome(name)
@@ -293,7 +272,7 @@ local needle = name:lower()
 
 for _, obj in ipairs(workspace:GetDescendants()) do
 if (obj:IsA("BasePart") or obj:IsA("Model")) and obj.Name:lower():find(needle, 1, true) then
-local pos = getPartPos(obj)
+local pos = getPos(obj)
 if pos then
 hrp.CFrame = CFrame.new(pos + Vector3.new(0, 5, 0))
 return
@@ -303,37 +282,30 @@ end
 end
 
 local function printDebugInfo()
-scanWorldCache(true)
-print("=== [RiF Hub Real Scan] ===")
-print("Throw/Animal targets:", #cache.throwTargets)
-for i = 1, math.min(#cache.throwTargets, 15) do
-print(" - Target:", cache.throwTargets[i].inst:GetFullName())
-end
-print("Remotes found:", #cache.remotes)
+scanCache(true)
+print("=== [RiF Hub Scan] ===")
+print("Yellow zones:", #cache.yellowZones)
+print("Train spots:", #cache.trainSpots)
+print("Remotes:", #cache.remotes)
 for i = 1, math.min(#cache.remotes, 20) do
-print(" - Remote:", cache.remotes[i].Name, "[" .. cache.remotes[i].ClassName .. "]")
+print(" - Remote:", cache.remotes[i].Name)
 end
-print("Collect parts found:", #cache.collectParts)
 end
 
--- Loops
 task.spawn(function()
 while true do
-if cfg.train or cfg.throwFood or cfg.collect or cfg.events then
-scanWorldCache(false)
+if cfg.throwFood or cfg.collect or cfg.events then
+scanCache(false)
 local char, hrp, hum = getRig()
 if char and hrp then
-if cfg.collect then
-doRealCollect(char, hrp)
-end
 if cfg.throwFood then
-doRealThrow(char, hrp, hum)
+stepAutoThrow(char, hrp, hum)
 end
-if cfg.train then
-doRealTrain(char, hrp, hum)
+if cfg.collect then
+stepAutoCollect(char, hrp)
 end
 if cfg.events then
-fireRemotesMatching({ "event", "claim", "reward", "gift", "spin", "holiday", "seasonal" })
+fireRemotes({ "event", "claim", "reward", "gift", "spin" })
 end
 end
 end
@@ -410,10 +382,10 @@ top.Parent = win
 Instance.new("UICorner", top).CornerRadius = UDim.new(0, 10)
 
 local titleLbl = Instance.new("TextLabel")
-titleLbl.Size = UDim2.new(0, 150, 1, 0)
+titleLbl.Size = UDim2.new(0, 155, 1, 0)
 titleLbl.Position = UDim2.new(0, 12, 0, 0)
 titleLbl.BackgroundTransparency = 1
-titleLbl.Text = "RiF Hub - Animal Farm"
+titleLbl.Text = "RiF Hub - Walk & Train"
 titleLbl.TextColor3 = Color3.fromRGB(240, 246, 255)
 titleLbl.Font = Enum.Font.GothamBold
 titleLbl.TextSize = 13
@@ -534,10 +506,17 @@ badge.BackgroundColor3 = active and Color3.fromRGB(37, 99, 235) or Color3.fromRG
 badge.TextColor3 = Color3.fromRGB(255, 255, 255)
 end
 
-local _, bTrain = addRow(pageMain, "Auto Chin-Up", "OFF", function(_, s)
+local _, bTrain = addRow(pageMain, "Train (2s Auto-Off)", "OFF", function(_, s)
 cfg.train = not cfg.train
 paintState(s, cfg.train)
+if cfg.train then
+runTwoSecondTrain()
+end
 end)
+
+setTrainUI = function(active)
+paintState(bTrain, active)
+end
 
 local _, bThrow = addRow(pageMain, "Auto Throw", "OFF", function(_, s)
 cfg.throwFood = not cfg.throwFood
@@ -550,14 +529,17 @@ paintState(s, cfg.collect)
 end)
 
 local _, bFull = addRow(pageMain, "Full Farm", "OFF", function(_, s)
-local nextV = not (cfg.train and cfg.throwFood and cfg.collect)
-cfg.train = nextV
+local nextV = not (cfg.throwFood and cfg.collect)
 cfg.throwFood = nextV
 cfg.collect = nextV
-paintState(bTrain, cfg.train)
 paintState(bThrow, cfg.throwFood)
 paintState(bCollect, cfg.collect)
 paintState(s, nextV)
+if nextV and not cfg.train then
+cfg.train = true
+paintState(bTrain, true)
+runTwoSecondTrain()
+end
 end)
 
 addRow(pageEvents, "Auto Events", "OFF", function(_, s)
