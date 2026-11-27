@@ -32,7 +32,7 @@ local biomes = {
 local cache = {
 remotes = {},
 collectParts = {},
-yellowZones = {},
+throwZones = {},
 trainSpots = {},
 lastScan = 0
 }
@@ -56,13 +56,17 @@ end
 return nil
 end
 
-local function isYellowBrick(part)
+local function isThrowZonePart(part)
 if not part:IsA("BasePart") then return false end
 local c = part.Color
-local isYellow = (c.R > 0.65 and c.G > 0.55 and c.B < 0.35)
-local nameLower = part.Name:lower()
-local isTrackOrZone = nameLower:find("yellow") or nameLower:find("throw") or nameLower:find("lane") or nameLower:find("strip") or nameLower:find("zone")
-return isYellow and (part.Size.X > 4 or part.Size.Z > 4 or isTrackOrZone)
+local n = part.Name:lower()
+local pn = part.Parent and part.Parent.Name:lower() or ""
+
+local nameHit = n:find("throw") or n:find("lane") or n:find("zone") or n:find("strip") or n:find("range") or n:find("meter")
+or pn:find("throw") or pn:find("lane") or pn:find("zone")
+local yellowHit = (c.R > 0.55 and c.G > 0.45 and c.B < 0.45)
+
+return nameHit or (yellowHit and (part.Size.X >= 3 or part.Size.Z >= 3))
 end
 
 local function isUpgradeOrRod(str)
@@ -71,12 +75,12 @@ return s:find("upgrade") or s:find("update") or s:find("buy") or s:find("shop") 
 end
 
 local function scanCache(force)
-if not force and (os.clock() - cache.lastScan < 2.5) then return end
+if not force and (os.clock() - cache.lastScan < 2.0) then return end
 cache.lastScan = os.clock()
 
 table.clear(cache.remotes)
 table.clear(cache.collectParts)
-table.clear(cache.yellowZones)
+table.clear(cache.throwZones)
 table.clear(cache.trainSpots)
 
 for _, r in ipairs(ReplicatedStorage:GetDescendants()) do
@@ -89,8 +93,8 @@ local char = player.Character
 for _, obj in ipairs(workspace:GetDescendants()) do
 if char and obj:IsDescendantOf(char) then continue end
 
-if obj:IsA("BasePart") and isYellowBrick(obj) then
-table.insert(cache.yellowZones, obj)
+if obj:IsA("BasePart") and isThrowZonePart(obj) then
+table.insert(cache.throwZones, obj)
 end
 
 if obj:IsA("TouchTransmitter") and obj.Parent and obj.Parent:IsA("BasePart") then
@@ -138,7 +142,7 @@ local bp = player:FindFirstChild("Backpack")
 if bp then
 for _, item in ipairs(bp:GetChildren()) do
 if item:IsA("Tool") then
-item.Parent = char
+pcall(function() item.Parent = char end)
 return item
 end
 end
@@ -146,13 +150,19 @@ end
 return nil
 end
 
-local function fireRemotes(keys)
+local function fireRemotesWithArgs(keys, argsList)
 for _, rem in ipairs(cache.remotes) do
 local rn = rem.Name:lower()
 for _, k in ipairs(keys) do
 if rn:find(k, 1, true) then
 if rem:IsA("RemoteEvent") then
+if argsList then
+for _, a in ipairs(argsList) do
+pcall(function() rem:FireServer(table.unpack(a)) end)
+end
+else
 pcall(function() rem:FireServer() end)
+end
 elseif rem:IsA("RemoteFunction") then
 pcall(function() rem:InvokeServer() end)
 end
@@ -162,13 +172,13 @@ end
 end
 end
 
-local function findNearestYellow(originPos)
+local function findNearestThrowZone(originPos)
 local bestPos = nil
 local bestDist = math.huge
-for i = #cache.yellowZones, 1, -1 do
-local part = cache.yellowZones[i]
+for i = #cache.throwZones, 1, -1 do
+local part = cache.throwZones[i]
 if not part or not part.Parent then
-table.remove(cache.yellowZones, i)
+table.remove(cache.throwZones, i)
 else
 local pos = part.Position + Vector3.new(0, (part.Size.Y / 2) + 2, 0)
 local d = (originPos - pos).Magnitude
@@ -181,28 +191,39 @@ end
 return bestPos, bestDist
 end
 
--- Walk to yellow area smoothly without TP, then throw food
-local function stepAutoThrow(char, hrp, hum)
-local yPos, yDist = findNearestYellow(hrp.Position)
-if yPos and yDist > 5 and hum then
-pcall(function() hum:MoveTo(yPos) end)
-return
-end
-
-local tool = equipTool()
+local function triggerPerfectThrow(tool)
 if tool then
 pcall(function() tool:Activate() end)
 end
 
 if VirtualInputManager then
+local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 600)
+local cx, cy = math.floor(vp.X * 0.5), math.floor(vp.Y * 0.65)
 pcall(function()
-VirtualInputManager:SendMouseButtonEvent(450, 450, 0, true, game, 0)
-task.wait(0.02)
-VirtualInputManager:SendMouseButtonEvent(450, 450, 0, false, game, 0)
+VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 0)
+task.wait(0.18)
+VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 0)
 end)
 end
 
-fireRemotes({ "throw", "feed", "food", "toss", "launch" })
+fireRemotesWithArgs({ "throw", "feed", "food", "toss", "launch", "perfect", "power" }, {
+{ 20, true },
+{ 20, "PERFECT" },
+{ 1, true },
+{}
+})
+end
+
+-- Move smoothly to throw zone and perform 20m PERFECT throw
+local function stepAutoThrow(char, hrp, hum)
+local zPos, zDist = findNearestThrowZone(hrp.Position)
+if zPos and zDist > 5 and hum then
+pcall(function() hum:MoveTo(zPos) end)
+return
+end
+
+local tool = equipTool()
+triggerPerfectThrow(tool)
 end
 
 -- Train at the training equipment (not rod upgrade) for 2 seconds then auto-stop
@@ -224,9 +245,7 @@ end
 end
 
 if best then
-if best.dist and best.dist > 8 and hum then
-pcall(function() hum:MoveTo(best.pos) end)
-elseif bestD > 8 and hum then
+if bestD > 8 and hum then
 pcall(function() hum:MoveTo(best.pos) end)
 else
 if best.kind == "prompt" then
@@ -237,7 +256,7 @@ end
 end
 end
 
-fireRemotes({ "chin", "train", "lift", "strength", "power" })
+fireRemotesWithArgs({ "chin", "train", "lift", "strength", "power" })
 end
 task.wait(0.2)
 end
@@ -262,7 +281,7 @@ firetouchinterest(hrp, part, 1)
 end)
 end
 end
-fireRemotes({ "collect", "claim", "cash", "coin", "money" })
+fireRemotesWithArgs({ "collect", "claim", "cash", "coin", "money" })
 end
 
 local function tpBiome(name)
@@ -284,7 +303,7 @@ end
 local function printDebugInfo()
 scanCache(true)
 print("=== [RiF Hub Scan] ===")
-print("Yellow zones:", #cache.yellowZones)
+print("Throw zones:", #cache.throwZones)
 print("Train spots:", #cache.trainSpots)
 print("Remotes:", #cache.remotes)
 for i = 1, math.min(#cache.remotes, 20) do
@@ -305,11 +324,11 @@ if cfg.collect then
 stepAutoCollect(char, hrp)
 end
 if cfg.events then
-fireRemotes({ "event", "claim", "reward", "gift", "spin" })
+fireRemotesWithArgs({ "event", "claim", "reward", "gift", "spin" })
 end
 end
 end
-task.wait(0.25)
+task.wait(0.35)
 end
 end)
 
@@ -342,7 +361,7 @@ end
 end)
 
 grip.InputChanged:Connect(function(input)
-if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType.Touch then
 dragInput = input
 end
 end)
@@ -382,10 +401,10 @@ top.Parent = win
 Instance.new("UICorner", top).CornerRadius = UDim.new(0, 10)
 
 local titleLbl = Instance.new("TextLabel")
-titleLbl.Size = UDim2.new(0, 155, 1, 0)
+titleLbl.Size = UDim2.new(0, 165, 1, 0)
 titleLbl.Position = UDim2.new(0, 12, 0, 0)
 titleLbl.BackgroundTransparency = 1
-titleLbl.Text = "RiF Hub - Walk & Train"
+titleLbl.Text = "RiF Hub - 20m Throw"
 titleLbl.TextColor3 = Color3.fromRGB(240, 246, 255)
 titleLbl.Font = Enum.Font.GothamBold
 titleLbl.TextSize = 13
@@ -518,7 +537,7 @@ setTrainUI = function(active)
 paintState(bTrain, active)
 end
 
-local _, bThrow = addRow(pageMain, "Auto Throw", "OFF", function(_, s)
+local _, bThrow = addRow(pageMain, "Auto Throw (20m)", "OFF", function(_, s)
 cfg.throwFood = not cfg.throwFood
 paintState(s, cfg.throwFood)
 end)
@@ -638,7 +657,9 @@ closeBtn.MouseButton1Click:Connect(function()
 cfg.train = false
 cfg.throwFood = false
 cfg.collect = false
-cfg.events = false
+cfg.events
+
+ = false
 cfg.speed = false
 cfg.jump = false
 gui:Destroy()
