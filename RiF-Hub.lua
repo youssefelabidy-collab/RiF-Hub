@@ -32,7 +32,7 @@ remotes = {},
 collectParts = {},
 prompts = {},
 clicks = {},
-animals = {},
+throwTargets = {},
 lastScan = 0
 }
 
@@ -55,6 +55,13 @@ end
 return nil
 end
 
+local function isThrowSpotName(nameLower)
+return nameLower:find("feed") or nameLower:find("throw") or nameLower:find("food")
+or nameLower:find("animal") or nameLower:find("pet") or nameLower:find("pen")
+or nameLower:find("trough") or nameLower:find("bowl") or nameLower:find("barn")
+or nameLower:find("ranch") or nameLower:find("habitat")
+end
+
 local function scanWorldCache(force)
 if not force and (os.clock() - cache.lastScan < 2.5) then return end
 cache.lastScan = os.clock()
@@ -63,7 +70,7 @@ table.clear(cache.remotes)
 table.clear(cache.collectParts)
 table.clear(cache.prompts)
 table.clear(cache.clicks)
-table.clear(cache.animals)
+table.clear(cache.throwTargets)
 
 for _, r in ipairs(ReplicatedStorage:GetDescendants()) do
 if r:IsA("RemoteEvent") or r:IsA("RemoteFunction") then
@@ -88,10 +95,20 @@ or n:find("drop") or n:find("orb") or n:find("gem") or n:find("reward")
 or pn:find("cash") or pn:find("coin") or pn:find("money") or pn:find("collect") or pn:find("drop") then
 table.insert(cache.collectParts, part)
 end
-elseif obj:IsA("Model") and obj:FindFirstChildOfClass("Humanoid") then
+end
+
+if obj:IsA("Model") or obj:IsA("BasePart") then
+local n = obj.Name:lower()
+local isAnimalModel = obj:IsA("Model") and (obj:FindFirstChildOfClass("Humanoid") or obj:FindFirstChildWhichIsA("Animator", true))
+if isAnimalModel or isThrowSpotName(n) then
 local pos = getPartPos(obj)
 if pos then
-table.insert(cache.animals, { model = obj, pos = pos })
+table.insert(cache.throwTargets, {
+inst = obj,
+pos = pos,
+priority = isAnimalModel and 1 or 2
+})
+end
 end
 end
 end
@@ -132,21 +149,27 @@ end
 end
 end
 
-local function findNearestAnimal(originPos)
+local function findBestThrowTarget(originPos)
 local best = nil
-local bestDist = math.huge
-for _, entry in ipairs(cache.animals) do
-if entry.model and entry.model.Parent then
-local pos = getPartPos(entry.model)
+local bestScore = math.huge
+
+for i = #cache.throwTargets, 1, -1 do
+local entry = cache.throwTargets[i]
+if not entry.inst or not entry.inst.Parent then
+table.remove(cache.throwTargets, i)
+else
+local pos = getPartPos(entry.inst)
 if pos then
-local d = (originPos - pos).Magnitude
-if d < bestDist then
-bestDist = d
-best = { pos = pos, dist = d }
+local dist = (originPos - pos).Magnitude
+local score = dist + (entry.priority == 1 and -6 or 0)
+if score < bestScore then
+bestScore = score
+best = { pos = pos, dist = dist }
 end
 end
 end
 end
+
 return best
 end
 
@@ -182,26 +205,33 @@ end
 fireRemotesMatching({ "collect", "claim", "cash", "coin", "money", "pick" })
 end
 
-local function doRealThrow(char, hrp)
+-- Move smoothly toward animal/throwing spot and throw food cleanly without teleporting away
+local function doRealThrow(char, hrp, hum)
 if not char or not hrp then return end
 
-local tool = equipTool()
-local nearestAnimal = findNearestAnimal(hrp.Position)
-if nearestAnimal and nearestAnimal.dist < 60 then
+local target = findBestThrowTarget(hrp.Position)
+if target then
+if target.dist > 14 then
+if hum then
+pcall(function() hum:MoveTo(target.pos) end)
+end
+else
 pcall(function()
-hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(nearestAnimal.pos.X, hrp.Position.Y, nearestAnimal.pos.Z))
+hrp.CFrame = CFrame.lookAt(hrp.Position, Vector3.new(target.pos.X, hrp.Position.Y, target.pos.Z))
 end)
 end
+end
 
+local tool = equipTool()
 if tool then
 pcall(function() tool:Activate() end)
 end
 
 if VirtualInputManager then
 pcall(function()
-VirtualInputManager:SendMouseButtonEvent(400, 400, 0, true, game, 0)
+VirtualInputManager:SendMouseButtonEvent(450, 450, 0, true, game, 0)
 task.wait(0.02)
-VirtualInputManager:SendMouseButtonEvent(400, 400, 0, false, game, 0)
+VirtualInputManager:SendMouseButtonEvent(450, 450, 0, false, game, 0)
 end)
 end
 
@@ -233,14 +263,12 @@ end
 end
 
 if bestPrompt then
-if bestPrompt.dist > 10 then
-pcall(function()
-hrp.CFrame = CFrame.new(bestPrompt.pos + Vector3.new(0, 3, 4))
-end)
+if bestPrompt.dist > 10 and hum then
+pcall(function() hum:MoveTo(bestPrompt.pos) end)
 end
-pcall(function()
-fireproximityprompt(bestPrompt.prompt)
-end)
+if bestPrompt.dist <= 14 then
+pcall(function() fireproximityprompt(bestPrompt.prompt) end)
+end
 end
 
 for _, cd in ipairs(cache.clicks) do
@@ -277,15 +305,15 @@ end
 local function printDebugInfo()
 scanWorldCache(true)
 print("=== [RiF Hub Real Scan] ===")
+print("Throw/Animal targets:", #cache.throwTargets)
+for i = 1, math.min(#cache.throwTargets, 15) do
+print(" - Target:", cache.throwTargets[i].inst:GetFullName())
+end
 print("Remotes found:", #cache.remotes)
-for i = 1, math.min(#cache.remotes, 25) do
+for i = 1, math.min(#cache.remotes, 20) do
 print(" - Remote:", cache.remotes[i].Name, "[" .. cache.remotes[i].ClassName .. "]")
 end
 print("Collect parts found:", #cache.collectParts)
-for i = 1, math.min(#cache.collectParts, 15) do
-print(" - Collect:", cache.collectParts[i]:GetFullName())
-end
-print("Animals found:", #cache.animals)
 end
 
 -- Loops
@@ -299,7 +327,7 @@ if cfg.collect then
 doRealCollect(char, hrp)
 end
 if cfg.throwFood then
-doRealThrow(char, hrp)
+doRealThrow(char, hrp, hum)
 end
 if cfg.train then
 doRealTrain(char, hrp, hum)
@@ -385,7 +413,7 @@ local titleLbl = Instance.new("TextLabel")
 titleLbl.Size = UDim2.new(0, 150, 1, 0)
 titleLbl.Position = UDim2.new(0, 12, 0, 0)
 titleLbl.BackgroundTransparency = 1
-titleLbl.Text = "RiF Hub - Real Farm"
+titleLbl.Text = "RiF Hub - Animal Farm"
 titleLbl.TextColor3 = Color3.fromRGB(240, 246, 255)
 titleLbl.Font = Enum.Font.GothamBold
 titleLbl.TextSize = 13
