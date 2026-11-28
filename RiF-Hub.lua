@@ -1,11 +1,12 @@
 --[[
-RiF Hub - Auto & Perfect Throw
+RiF Hub - Auto Throw, Perfect Throw & Anti-AFK
 Created by: Youssef Elabidy (RiF Hub)
 GitHub: github.com/Youssefelabidy-collab
 ]]
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
+local VirtualUser = game:GetService("VirtualUser")
 local player = Players.LocalPlayer
 
 local Controllers = player:WaitForChild("PlayerScripts"):WaitForChild("Client"):WaitForChild("Controllers")
@@ -18,6 +19,24 @@ local gen = 0
 local spotX = nil
 local tapDelay = 0.8
 local stats = { done = 0, failed = 0 }
+
+-- Anti-AFK صامت في الخلفية
+player.Idled:Connect(function()
+pcall(function()
+VirtualUser:CaptureController()
+VirtualUser:ClickButton2(Vector2.new())
+end)
+end)
+
+task.spawn(function()
+while true do
+task.wait(120)
+pcall(function()
+VirtualUser:CaptureController()
+VirtualUser:ClickButton2(Vector2.new())
+end)
+end
+end)
 
 if not ThrowMeter.__SNOrig then
 ThrowMeter.__SNOrig = ThrowMeter.Run
@@ -82,12 +101,29 @@ end)
 return ok
 end
 
-local function makeDraggable(dragHandle, targetFrame)
+-- سحب اللوحة بالكامل في أي حالة (مفتوحة أو مصغرة)
+local function makeFrameDraggable(targetFrame, blockedFrames)
 local dragging = false
 local dragInput, dragStart, startPos
 
-dragHandle.InputBegan:Connect(function(input)
+local function isBlocked(guiObj)
+if not blockedFrames then return false end
+for _, b in ipairs(blockedFrames) do
+if guiObj == b or guiObj:IsDescendantOf(b) then
+return true
+end
+end
+return false
+end
+
+targetFrame.InputBegan:Connect(function(input)
 if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+local hitObjects = player:WaitForChild("PlayerGui"):GetGuiObjectsAtPosition(input.Position.X, input.Position.Y)
+for _, obj in ipairs(hitObjects) do
+if isBlocked(obj) then
+return
+end
+end
 dragging = true
 dragStart = input.Position
 startPos = targetFrame.Position
@@ -100,7 +136,7 @@ end)
 end
 end)
 
-dragHandle.InputChanged:Connect(function(input)
+targetFrame.InputChanged:Connect(function(input)
 if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
 dragInput = input
 end
@@ -136,6 +172,7 @@ main.Position = UDim2.fromScale(0.5, 0.5)
 main.AnchorPoint = Vector2.new(0.5, 0.5)
 main.BackgroundColor3 = Color3.fromRGB(10, 14, 24)
 main.BorderSizePixel = 0
+main.Active = true
 main.Parent = sg
 
 Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
@@ -205,7 +242,6 @@ container.Visible = not minimized
 main.Size = minimized and UDim2.fromOffset(fullSize.X.Offset, 42) or fullSize
 minBtn.Text = minimized and "+" or "-"
 end)
-makeDraggable(topBar, main)
 
 local statusLbl = Instance.new("TextLabel")
 statusLbl.Size = UDim2.new(1, 0, 0, 28)
@@ -278,6 +314,8 @@ fill.BackgroundColor3 = Color3.fromRGB(190, 30, 50)
 fill.BorderSizePixel = 0
 fill.Parent = barBg
 Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 6)
+
+makeFrameDraggable(main, { barBg, minBtn })
 
 local function refreshAutoBtn()
 autoBtn.Text = ("Auto Throw : %s"):format(autoThrowEnabled and "ON" or "OFF")
